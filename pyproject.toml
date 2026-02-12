@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pan"
+version = "0.1.0"
+description = "Home agent framework — multi-agent system for home/life operations"
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    # LangGraph + LangChain
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "langchain-openai>=0.3.0",
+    "langchain-core>=0.3.0",
+    # Discord
+    "discord.py>=2.4.0",
+    # Database
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    # Checkpointer driver (psycopg3, not asyncpg)
+    "psycopg[binary,pool]>=3.2.0",
+    # Config + validation
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    # Redis
+    "redis[hiredis]>=5.2.0",
+    # HTTP client (for Portainer API)
+    "httpx>=0.28.0",
+    # Scheduler
+    "apscheduler>=3.10.0",
+    # Logging
+    "structlog>=24.4.0",
+    # Performance
+    "uvloop>=0.21.0; sys_platform != 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "aiosqlite>=0.20.0",
+    "respx>=0.22.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pan"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "N", "ASYNC", "S", "B", "W"]
+ignore = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pan"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

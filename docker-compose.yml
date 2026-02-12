@@ -1,0 +1,22 @@
+services:
+  pan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pan
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./src/pan/config/prompts:/app/src/pan/config/prompts:ro
+    networks:
+      - infra
+    healthcheck:
+      test: ["CMD", "python", "-c", "import pan; print('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  infra:
+    external: true
