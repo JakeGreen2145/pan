@@ -1,2 +1,234 @@
 # pan
-Agents for the based home
+
+Multi-agent system for home and life operations. Built with Python, LangGraph, and Discord — deployed via Docker.
+
+Pan runs a team of specialized AI agents that handle different domains of household management. A supervisor routes incoming messages to the right agent, each agent has its own tools and personality, and the whole system is accessible through a Discord bot.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        Discord Bot                           │
+│               /ask  /status  approval UI                     │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     Message Router                            │
+│          route_message() → stream graph events                │
+│          resume_after_approval() → human-in-loop              │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│                   Supervisor (LangGraph)                      │
+│       LLM-powered router with structured output               │
+│       Decides which domain agent handles the request           │
+│       Supports direct routing via /ask <domain>               │
+└────────┬─────────────┬───────────────────────────────────────┘
+         │             │
+         ▼             ▼
+┌──────────────┐ ┌──────────────┐  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+│  Tech Chair  │ │House Manager │    Future agents:
+│              │ │              │  │ Treasurer            │
+│ • Containers │ │ • Rent status│    Media Expert
+│ • Logs       │ │ • Tenants    │  │ Social Chair         │
+│ • Start/stop │ │ • Payments   │    Professional Rels
+│ • Restart    │ │ • Late fees  │  │ Public Relations     │
+│              │ │ • Reminders  │    House Doctor
+│  (Portainer) │ │  (Postgres)  │  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+└──────────────┘ └──────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│                        Services                               │
+│                                                               │
+│   PostgreSQL ─── SQLAlchemy async ─── Alembic migrations      │
+│   Redis ──────── caching / pub-sub                            │
+│   LangGraph ──── checkpointer (psycopg3)                      │
+│   APScheduler ── cron jobs (monthly rent check)               │
+│   OpenRouter ─── LLM API (Claude Sonnet)                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Key design decisions
+
+- **Supervisor pattern**: A central LangGraph `StateGraph` routes messages to domain agents. Each agent is a LangGraph `react_agent` with its own tools, prompt, and model config. After an agent responds, control returns to the supervisor.
+- **Approval workflow**: Agents can trigger human-in-the-loop interrupts. The Discord bot presents approve/reject buttons and pauses the graph until an admin responds (or times out after 5 minutes).
+- **Persistence**: LangGraph state is checkpointed to Postgres via `AsyncPostgresSaver`, so conversations survive restarts. Each Discord thread gets its own `thread_id` for multi-turn context.
+- **Scheduled tasks**: APScheduler runs cron jobs (e.g., monthly rent checks on the 1st at 9 AM) by injecting messages directly into the graph.
+- **Config**: All settings use Pydantic `BaseSettings` with `PAN_` env prefix and `__` nesting (`PAN_DB__HOST`, `PAN_DISCORD__TOKEN`, etc.).
+
+### Agents
+
+| Agent | Domain | Tools |
+|-------|--------|-------|
+| **Tech Chair** | Infrastructure / Docker | List, inspect, start, stop, restart containers; read logs (via Portainer API) |
+| **House Manager** | Tenant & rent management | Check rent status, tenant info, late fees, record payments, send reminders |
+
+Each agent is defined as a module under `src/pan/agents/<domain>/` with:
+- `agent.py` — creates the LangGraph agent
+- `tools.py` — `@tool`-decorated async functions
+- System prompt in `src/pan/config/prompts/<domain>.txt`
+
+## Setup
+
+### Prerequisites
+
+- Python 3.12+
+- Docker & Docker Compose
+- PostgreSQL, Redis (or use existing infrastructure)
+- A Discord bot token
+- An OpenRouter API key
+
+### 1. Clone and install
+
+```bash
+git clone <repo-url> && cd pan
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### 2. Configure environment
+
+Copy the example and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+Required variables:
+
+```env
+# Discord
+PAN_DISCORD__TOKEN=your-discord-bot-token
+PAN_DISCORD__GUILD_ID=123456789
+PAN_DISCORD__ADMIN_USER_IDS=[123456789]
+
+# LLM
+PAN_OPENROUTER__API_KEY=your-openrouter-api-key
+
+# Database
+PAN_DB__HOST=localhost
+PAN_DB__PORT=5432
+PAN_DB__USER=pan
+PAN_DB__PASSWORD=changeme
+PAN_DB__NAME=pan
+
+# Redis
+PAN_REDIS__HOST=localhost
+PAN_REDIS__PORT=6379
+
+# Portainer (for Tech Chair agent)
+PAN_PORTAINER__BASE_URL=https://portainer.local:9443
+PAN_PORTAINER__API_KEY=your-portainer-api-key
+
+# General
+PAN_DEBUG=true
+PAN_LOG_LEVEL=DEBUG
+```
+
+### 3. Service integrations
+
+Each external service Pan connects to has its own setup guide:
+
+| Service | Used By | Guide |
+|---------|---------|-------|
+| Discord | Interface — slash commands, approval UI | [docs/discord.md](docs/discord.md) |
+| Portainer | Tech Chair — Docker container management | [docs/portainer.md](docs/portainer.md) |
+
+More integrations will be added as new agents are built (Proxmox, TrueNAS, MQTT, etc.).
+
+### 4. Run database migrations
+
+```bash
+alembic upgrade head
+```
+
+### 5. Start the application
+
+**With Docker:**
+
+```bash
+docker compose up -d
+```
+
+**Locally (for development):**
+
+```bash
+# Ensure Postgres and Redis are accessible
+python -m pan
+```
+
+### 6. Discord bot commands
+
+| Command | Description |
+|---------|-------------|
+| `/ask <domain> <question>` | Ask a specific agent (or choose "Auto" for supervisor routing) |
+| `/status` | Check active agents and bot latency |
+
+## Development
+
+### Linting & formatting
+
+```bash
+ruff check .          # lint
+ruff check --fix .    # lint + auto-fix
+ruff format .         # format
+mypy src/             # type check
+```
+
+### Testing
+
+```bash
+pytest                                        # full suite
+pytest tests/test_something.py                # single file
+pytest -k "keyword"                           # keyword match
+pytest --cov=src/pan --cov-report=term-missing  # with coverage
+```
+
+### Adding a new agent
+
+1. Create `src/pan/agents/<domain>/` with `__init__.py`, `agent.py`, `tools.py`
+2. Write the system prompt in `src/pan/config/prompts/<domain>.txt`
+3. Optionally add a model config in `src/pan/config/models.py`
+4. Register the agent in `src/pan/agents/registry.py` → `init_agents()`
+5. Add a choice to the Discord `/ask` command in `src/pan/interface/discord_bot.py`
+
+## Project structure
+
+```
+pan/
+├── src/pan/
+│   ├── __main__.py              # Entry point
+│   ├── agents/
+│   │   ├── base.py              # create_domain_agent() factory
+│   │   ├── registry.py          # Agent registration + init
+│   │   ├── tech_chair/          # Docker / Portainer management
+│   │   └── house_manager/       # Rent & tenant management
+│   ├── orchestration/
+│   │   ├── supervisor.py        # LangGraph supervisor graph
+│   │   ├── router.py            # Message routing + approval resume
+│   │   ├── scheduler.py         # APScheduler cron jobs
+│   │   └── state.py             # AgentState (MessagesState + metadata)
+│   ├── interface/
+│   │   ├── discord_bot.py       # Discord bot + slash commands
+│   │   └── discord_views.py     # Approval button UI
+│   ├── services/
+│   │   ├── database.py          # SQLAlchemy async engine + sessions
+│   │   ├── models.py            # User, Tenant, RentPayment, ApprovalRequest
+│   │   ├── checkpointer.py      # LangGraph Postgres checkpointer
+│   │   └── redis.py             # Redis client
+│   ├── config/
+│   │   ├── settings.py          # Pydantic BaseSettings
+│   │   ├── models.py            # Per-agent LLM config
+│   │   ├── logging.py           # structlog setup
+│   │   └── prompts/             # Agent system prompts (.txt)
+│   └── exceptions.py            # PanError hierarchy
+├── tests/
+├── docs/                        # Integration setup guides
+├── alembic/                     # Database migrations
+├── docker-compose.yml
+├── Dockerfile
+└── pyproject.toml
+```
