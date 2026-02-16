@@ -3,12 +3,14 @@ from unittest.mock import patch
 import pytest
 import respx
 
-from pan.agents.tech_chair.tools import (
+from pan.agents.tech_chair.portainer_tools import (
     get_container_details,
     get_container_logs,
     list_containers,
     restart_container,
 )
+
+PATCH_TARGET = "pan.agents.tech_chair.portainer_tools.get_settings"
 
 
 @pytest.fixture
@@ -38,40 +40,55 @@ def portainer_mock(mock_portainer_response):
 
 
 async def test_list_containers(portainer_mock, test_settings):
-    with patch("pan.agents.tech_chair.tools.get_settings", return_value=test_settings):
-        result = await list_containers.ainvoke({"status_filter": None})
+    with patch(PATCH_TARGET, return_value=test_settings):
+        result = await list_containers.ainvoke({"instance": "main", "status_filter": None})
         assert "nginx-proxy" in result
         assert "postgres-main" in result
         assert "stopped-service" in result
 
 
 async def test_list_containers_filtered(portainer_mock, test_settings):
-    with patch("pan.agents.tech_chair.tools.get_settings", return_value=test_settings):
-        result = await list_containers.ainvoke({"status_filter": "running"})
+    with patch(PATCH_TARGET, return_value=test_settings):
+        result = await list_containers.ainvoke({"instance": "main", "status_filter": "running"})
         assert "nginx-proxy" in result
         assert "stopped-service" not in result
 
 
 async def test_get_container_details_found(portainer_mock, test_settings):
-    with patch("pan.agents.tech_chair.tools.get_settings", return_value=test_settings):
-        result = await get_container_details.ainvoke({"container_id": "abc123def456"})
+    with patch(PATCH_TARGET, return_value=test_settings):
+        result = await get_container_details.ainvoke(
+            {"container_id": "abc123def456", "instance": "main"}
+        )
         assert "nginx-proxy" in result
         assert "nginx:latest" in result
 
 
 async def test_get_container_details_not_found(portainer_mock, test_settings):
-    with patch("pan.agents.tech_chair.tools.get_settings", return_value=test_settings):
-        result = await get_container_details.ainvoke({"container_id": "nonexistent"})
+    with patch(PATCH_TARGET, return_value=test_settings):
+        result = await get_container_details.ainvoke(
+            {"container_id": "nonexistent", "instance": "main"}
+        )
         assert "not found" in result.lower()
 
 
 async def test_restart_container_success(portainer_mock, test_settings):
-    with patch("pan.agents.tech_chair.tools.get_settings", return_value=test_settings):
-        result = await restart_container.ainvoke({"container_id": "abc123def456"})
+    with patch(PATCH_TARGET, return_value=test_settings):
+        result = await restart_container.ainvoke(
+            {"container_id": "abc123def456", "instance": "main"}
+        )
         assert "restarted successfully" in result
 
 
 async def test_get_container_logs_success(portainer_mock, test_settings):
-    with patch("pan.agents.tech_chair.tools.get_settings", return_value=test_settings):
-        result = await get_container_logs.ainvoke({"container_id": "abc123def456", "tail": 50})
+    with patch(PATCH_TARGET, return_value=test_settings):
+        result = await get_container_logs.ainvoke(
+            {"container_id": "abc123def456", "tail": 50, "instance": "main"}
+        )
         assert "Line 1" in result
+
+
+async def test_unknown_instance(test_settings):
+    with patch(PATCH_TARGET, return_value=test_settings):
+        result = await list_containers.ainvoke({"instance": "nonexistent"})
+        assert "Unknown Portainer instance" in result
+        assert "main" in result

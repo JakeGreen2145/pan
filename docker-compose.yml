@@ -1,4 +1,36 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pan-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pan
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: pan
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pan -d pan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: pan-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   pan:
     build:
       context: .
@@ -7,16 +39,19 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./src/pan/config/prompts:/app/src/pan/config/prompts:ro
-    networks:
-      - infra
     healthcheck:
       test: ["CMD", "python", "-c", "import pan; print('ok')"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-networks:
-  infra:
-    external: true
+volumes:
+  pgdata:
+  redisdata:

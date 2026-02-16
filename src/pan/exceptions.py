@@ -80,3 +80,23 @@ class TenantNotFoundError(PanError):
 
 class RentCheckError(PanError):
     """Rent checking operation failed."""
+
+
+class TrueNASError(ExternalAPIError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(service="truenas", status_code=status_code, detail=detail)
+
+
+class ProxmoxError(ExternalAPIError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(service="proxmox", status_code=status_code, detail=detail)
+
+
+class UniFiError(ExternalAPIError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(service="unifi", status_code=status_code, detail=detail)
+
+
+class UniFiAuthError(UniFiError):
+    def __init__(self) -> None:
+        super().__init__(status_code=401, detail="Authentication failed or session expired")

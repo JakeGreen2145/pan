@@ -71,12 +71,35 @@ class OpenRouterSettings(BaseModel):
     base_url: str = "https://openrouter.ai/api/v1"
 
 
-class PortainerSettings(BaseModel):
-    """Portainer API settings. Env: PAN_PORTAINER__BASE_URL, etc."""
-
-    base_url: str = "https://portainer.local:9443"
+class PortainerInstanceSettings(BaseModel):
+    base_url: str
     api_key: SecretStr = SecretStr("")
     endpoint_id: int | None = None
+    verify_ssl: bool = False
+
+
+class PortainerSettings(BaseModel):
+    """Portainer API settings. Env: PAN_PORTAINER__INSTANCES__<NAME>__BASE_URL, etc."""
+
+    instances: dict[str, PortainerInstanceSettings] = {}
+
+
+class TrueNASSettings(BaseModel):
+    base_url: str = "https://truenas.local/api/v2.0"
+    api_key: SecretStr = SecretStr("")
+    verify_ssl: bool = False
+
+
+class ProxmoxSettings(BaseModel):
+    base_url: str = "https://proxmox.local:8006"
+    api_token: SecretStr = SecretStr("")
+    node_name: str = "pve"
+    verify_ssl: bool = False
+
+
+class UniFiSettings(BaseModel):
+    base_url: str = "https://unifi.local"
+    api_key: SecretStr = SecretStr("")
     verify_ssl: bool = False
 
 
@@ -96,6 +119,9 @@ class Settings(BaseSettings):
     discord: DiscordSettings  # Required — no default
     openrouter: OpenRouterSettings  # Required — no default
     portainer: PortainerSettings = PortainerSettings()
+    truenas: TrueNASSettings = TrueNASSettings()
+    proxmox: ProxmoxSettings = ProxmoxSettings()
+    unifi: UniFiSettings = UniFiSettings()
 
     debug: bool = False
     log_level: str = "INFO"

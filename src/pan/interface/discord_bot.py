@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from typing import Any
 
 import discord
@@ -35,6 +36,7 @@ class PanBot(commands.Bot):
         self.settings = settings
         self.graph = graph
         self._pending_approvals: dict[str, ApprovalView] = {}
+        self._managed_threads: set[int] = set()
 
     async def setup_hook(self) -> None:
         await self.add_cog(AgentCog(self))
@@ -50,6 +52,109 @@ class PanBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logger.info("discord_bot_ready", user=str(self.user))
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author == self.user or message.author.bot:
+            return
+
+        if isinstance(message.channel, discord.Thread):
+            if message.channel.id in self._managed_threads:
+                await self._handle_thread_followup(message)
+                return
+
+        if self.user and self.user.mentioned_in(message) and not message.mention_everyone:
+            await self._handle_mention(message)
+            return
+
+        await self.process_commands(message)
+
+    async def _handle_thread_followup(self, message: discord.Message) -> None:
+        thread = message.channel
+        thread_id = str(thread.id)
+        user_id = str(message.author.id)
+        user_role = self._get_user_role(message.author.id)
+
+        logger.info(
+            "thread_followup",
+            thread_id=thread_id,
+            user_id=user_id,
+            message_preview=message.content[:100],
+        )
+
+        async with thread.typing():
+            try:
+                async for event in route_message(
+                    self.graph,
+                    message.content,
+                    user_id=user_id,
+                    user_role=user_role,
+                    thread_id=thread_id,
+                ):
+                    for _node_name, node_output in event.items():
+                        if not isinstance(node_output, dict):
+                            continue
+                        for msg in node_output.get("messages", []):
+                            if isinstance(msg, AIMessage) and msg.content:
+                                await _send_long_message(thread, str(msg.content))
+            except Exception as exc:
+                tb = "".join(traceback.format_exception(exc))
+                logger.exception(
+                    "thread_followup_error",
+                    thread_id=thread_id,
+                    error_type=type(exc).__name__,
+                )
+                await _send_long_message(thread, f"```\n{tb[-1800:]}\n```")
+
+    async def _handle_mention(self, message: discord.Message) -> None:
+        content = message.content
+        if self.user:
+            content = content.replace(f"<@{self.user.id}>", "").strip()
+            content = content.replace(f"<@!{self.user.id}>", "").strip()
+
+        if not content:
+            await message.reply("Hey! Ask me something or use `/ask` to talk to a specific agent.")
+            return
+
+        user_id = str(message.author.id)
+        user_role = self._get_user_role(message.author.id)
+
+        initial_reply = await message.reply("Working on it...")
+        thread = await initial_reply.create_thread(
+            name=f"Pan: {content[:80]}",
+            auto_archive_duration=1440,
+        )
+        thread_id = str(thread.id)
+        self._managed_threads.add(thread.id)
+
+        logger.info(
+            "mention_received",
+            thread_id=thread_id,
+            user_id=user_id,
+            message_preview=content[:100],
+        )
+
+        try:
+            async for event in route_message(
+                self.graph,
+                content,
+                user_id=user_id,
+                user_role=user_role,
+                thread_id=thread_id,
+            ):
+                for _node_name, node_output in event.items():
+                    if not isinstance(node_output, dict):
+                        continue
+                    for msg in node_output.get("messages", []):
+                        if isinstance(msg, AIMessage) and msg.content:
+                            await _send_long_message(thread, str(msg.content))
+        except Exception as exc:
+            tb = "".join(traceback.format_exception(exc))
+            logger.exception(
+                "mention_error",
+                thread_id=thread_id,
+                error_type=type(exc).__name__,
+            )
+            await _send_long_message(thread, f"```\n{tb[-1800:]}\n```")
 
     def _is_admin(self, user_id: int) -> bool:
         return user_id in self.settings.admin_user_ids
@@ -92,14 +197,16 @@ class AgentCog(commands.Cog, name="Pan Agents"):
         user_role = self.bot._get_user_role(interaction.user.id)
 
         domain_label = domain.replace("_", " ").title() if domain != "auto" else "Pan"
-        initial_msg = await interaction.followup.send(
-            f"**{domain_label}** is working on: {question[:200]}"
-        )
+        await interaction.followup.send(f"**{domain_label}** is working on: {question[:200]}")
+
+        channel = interaction.channel
+        initial_msg = await channel.send(f"🧵 **{domain_label}** — {question[:100]}")
         thread = await initial_msg.create_thread(
             name=f"{domain_label}: {question[:80]}",
             auto_archive_duration=1440,
         )
         thread_id = str(thread.id)
+        self.bot._managed_threads.add(thread.id)
 
         try:
             async for event in route_message(
@@ -112,9 +219,15 @@ class AgentCog(commands.Cog, name="Pan Agents"):
             ):
                 await self._handle_graph_event(event, thread, thread_id)
 
-        except Exception:
-            logger.exception("ask_command_error", thread_id=thread_id)
-            await thread.send("An error occurred while processing your request.")
+        except Exception as exc:
+            tb = "".join(traceback.format_exception(exc))
+            logger.exception(
+                "ask_command_error",
+                thread_id=thread_id,
+                error_type=type(exc).__name__,
+                error_detail=str(exc),
+            )
+            await _send_long_message(thread, f"```\n{tb[-1800:]}\n```")
 
     @app_commands.command(
         name="status",

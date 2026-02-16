@@ -28,16 +28,16 @@ Pan runs a team of specialized AI agents that handle different domains of househ
 └────────┬─────────────┬───────────────────────────────────────┘
          │             │
          ▼             ▼
-┌──────────────┐ ┌──────────────┐  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-│  Tech Chair  │ │House Manager │    Future agents:
-│              │ │              │  │ Treasurer            │
-│ • Containers │ │ • Rent status│    Media Expert
-│ • Logs       │ │ • Tenants    │  │ Social Chair         │
-│ • Start/stop │ │ • Payments   │    Professional Rels
-│ • Restart    │ │ • Late fees  │  │ Public Relations     │
-│              │ │ • Reminders  │    House Doctor
-│  (Portainer) │ │  (Postgres)  │  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
-└──────────────┘ └──────────────┘
+┌──────────────────────┐ ┌──────────────┐  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+│     Tech Chair       │ │House Manager │    Future agents:
+│                      │ │              │  │ Treasurer          │
+│ • Portainer (multi)  │ │ • Rent status│    Media Expert
+│ • Proxmox VE (VMs)  │ │ • Tenants    │  │ Social Chair       │
+│ • TrueNAS (storage)  │ │ • Payments   │    Professional Rels
+│ • UniFi (network)    │ │ • Late fees  │  │ Public Relations   │
+│                      │ │ • Reminders  │    House Doctor
+│  24 tools            │ │  (Postgres)  │  └ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+└──────────────────────┘ └──────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
 │                        Services                               │
@@ -60,14 +60,14 @@ Pan runs a team of specialized AI agents that handle different domains of househ
 
 ### Agents
 
-| Agent | Domain | Tools |
-|-------|--------|-------|
-| **Tech Chair** | Infrastructure / Docker | List, inspect, start, stop, restart containers; read logs (via Portainer API) |
-| **House Manager** | Tenant & rent management | Check rent status, tenant info, late fees, record payments, send reminders |
+| Agent | Domain | Integrations | Tools |
+|-------|--------|--------------|-------|
+| **Tech Chair** | Infrastructure | Portainer (multi-instance), Proxmox VE, TrueNAS Scale, UniFi | 24 tools — containers, VMs, storage, network |
+| **House Manager** | Tenant & rent | PostgreSQL | 5 tools — rent status, tenants, payments, late fees, reminders |
 
 Each agent is defined as a module under `src/pan/agents/<domain>/` with:
-- `agent.py` — creates the LangGraph agent
-- `tools.py` — `@tool`-decorated async functions
+- `agent.py` — creates the LangGraph agent and registers tools
+- `*_tools.py` — `@tool`-decorated async functions (one file per integration)
 - System prompt in `src/pan/config/prompts/<domain>.txt`
 
 ## Setup
@@ -119,9 +119,25 @@ PAN_DB__NAME=pan
 PAN_REDIS__HOST=localhost
 PAN_REDIS__PORT=6379
 
-# Portainer (for Tech Chair agent)
-PAN_PORTAINER__BASE_URL=https://portainer.local:9443
-PAN_PORTAINER__API_KEY=your-portainer-api-key
+# Portainer (multi-instance)
+PAN_PORTAINER__INSTANCES__MAIN__BASE_URL=https://portainer.local:9443
+PAN_PORTAINER__INSTANCES__MAIN__API_KEY=your-api-key
+PAN_PORTAINER__INSTANCES__GPU__BASE_URL=https://gpu-host:9443
+PAN_PORTAINER__INSTANCES__GPU__API_KEY=your-gpu-api-key
+
+# TrueNAS Scale
+PAN_TRUENAS__BASE_URL=https://truenas.local/api/v2.0
+PAN_TRUENAS__API_KEY=your-truenas-api-key
+
+# Proxmox VE
+PAN_PROXMOX__BASE_URL=https://proxmox.local:8006
+PAN_PROXMOX__API_TOKEN=root@pam!pan=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+PAN_PROXMOX__NODE_NAME=pve
+
+# UniFi
+PAN_UNIFI__BASE_URL=https://192.168.1.1
+PAN_UNIFI__USERNAME=admin
+PAN_UNIFI__PASSWORD=your-unifi-password
 
 # General
 PAN_DEBUG=true
@@ -135,9 +151,10 @@ Each external service Pan connects to has its own setup guide:
 | Service | Used By | Guide |
 |---------|---------|-------|
 | Discord | Interface — slash commands, approval UI | [docs/discord.md](docs/discord.md) |
-| Portainer | Tech Chair — Docker container management | [docs/portainer.md](docs/portainer.md) |
-
-More integrations will be added as new agents are built (Proxmox, TrueNAS, MQTT, etc.).
+| Portainer | Tech Chair — Docker container management (multi-instance) | [docs/portainer.md](docs/portainer.md) |
+| Proxmox VE | Tech Chair — VM and LXC container management | [docs/proxmox.md](docs/proxmox.md) |
+| TrueNAS Scale | Tech Chair — ZFS storage, disks, snapshots, alerts | [docs/truenas.md](docs/truenas.md) |
+| UniFi | Tech Chair — Network devices, clients, WAN, port forwarding | [docs/unifi.md](docs/unifi.md) |
 
 ### 4. Run database migrations
 
@@ -204,7 +221,7 @@ pan/
 │   ├── agents/
 │   │   ├── base.py              # create_domain_agent() factory
 │   │   ├── registry.py          # Agent registration + init
-│   │   ├── tech_chair/          # Docker / Portainer management
+│   │   ├── tech_chair/          # Infra: Portainer, Proxmox, TrueNAS, UniFi
 │   │   └── house_manager/       # Rent & tenant management
 │   ├── orchestration/
 │   │   ├── supervisor.py        # LangGraph supervisor graph

@@ -12,9 +12,13 @@ from pan.config.settings import (
     DatabaseSettings,
     DiscordSettings,
     OpenRouterSettings,
+    PortainerInstanceSettings,
     PortainerSettings,
+    ProxmoxSettings,
     RedisSettings,
     Settings,
+    TrueNASSettings,
+    UniFiSettings,
 )
 from pan.services.database import Base
 
@@ -39,9 +43,26 @@ def test_settings() -> Settings:
             api_key="sk-test-key",  # type: ignore[arg-type]
         ),
         portainer=PortainerSettings(
-            base_url="https://portainer.test:9443",
-            api_key="ptr_test",  # type: ignore[arg-type]
-            endpoint_id=1,
+            instances={
+                "main": PortainerInstanceSettings(
+                    base_url="https://portainer.test:9443",
+                    api_key="ptr_test",  # type: ignore[arg-type]
+                    endpoint_id=1,
+                ),
+            }
+        ),
+        truenas=TrueNASSettings(
+            base_url="https://truenas.test/api/v2.0",
+            api_key="test-truenas-key",  # type: ignore[arg-type]
+        ),
+        proxmox=ProxmoxSettings(
+            base_url="https://proxmox.test:8006",
+            api_token="root@pam!test=00000000-0000-0000-0000-000000000000",  # type: ignore[arg-type]  # noqa: S106, E501
+            node_name="pve",
+        ),
+        unifi=UniFiSettings(
+            base_url="https://unifi.test",
+            api_key="test-unifi-key",  # type: ignore[arg-type]
         ),
         debug=True,
         log_level="DEBUG",

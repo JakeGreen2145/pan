@@ -41,6 +41,18 @@ async def main() -> None:
 
     bot = PanBot(settings.discord, graph)
 
+    print(
+        "\n"
+        " '########:::::'###::::'##::: ##:\n"
+        "  ##.... ##:::'## ##::: ###:: ##:\n"
+        "  ##:::: ##::'##:. ##:: ####: ##:\n"
+        "  ########::'##:::. ##: ## ## ##:\n"
+        "  ##.....::: #########: ##. ####:\n"
+        "  ##:::::::: ##.... ##: ##:. ###:\n"
+        "  ##:::::::: ##:::: ##: ##::. ##:\n"
+        " ..:::::::::..:::::..::..::::..:\n"
+    )
+
     try:
         logger.info("starting_discord_bot")
         await bot.start(settings.discord.token.get_secret_value())
