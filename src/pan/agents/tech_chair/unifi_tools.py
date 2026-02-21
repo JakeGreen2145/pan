@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import httpx
 import structlog
@@ -12,21 +13,28 @@ logger = structlog.get_logger()
 _cached_site_id: str | None = None
 
 
-def _seconds_to_human(s: int | float) -> str:
-    s = int(s)
-    if s < 60:
-        return f"{s}s"
-    days, s = divmod(s, 86400)
-    hours, s = divmod(s, 3600)
-    minutes, _ = divmod(s, 60)
-    parts: list[str] = []
-    if days:
-        parts.append(f"{days}d")
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes:
-        parts.append(f"{minutes}m")
-    return " ".join(parts) or "0m"
+def _time_since(iso_timestamp: str | None) -> str:
+    if not iso_timestamp:
+        return "N/A"
+    try:
+        connected = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+        delta = datetime.now(UTC) - connected
+        total_seconds = int(delta.total_seconds())
+        if total_seconds < 60:
+            return f"{total_seconds}s"
+        days, rem = divmod(total_seconds, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, _ = divmod(rem, 60)
+        parts: list[str] = []
+        if days:
+            parts.append(f"{days}d")
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        return " ".join(parts) or "0m"
+    except (ValueError, TypeError):
+        return "N/A"
 
 
 @asynccontextmanager
@@ -78,44 +86,49 @@ async def _get_all_pages(client: httpx.AsyncClient, path: str, *, limit: int = 2
 
 @tool
 async def get_network_health() -> str:
-    """Get overall UniFi network health — lists all sites with device counts and status."""
+    """Get UniFi network health — sites, device counts, and network list."""
     try:
         async with _unifi_client() as client:
             resp = await client.get("/v1/sites")
             resp.raise_for_status()
             sites = resp.json().get("data", [])
+
+            if not sites:
+                return "No UniFi sites found."
+
+            site_id = sites[0]["id"]
+            devices = await _get_all_pages(client, f"/v1/sites/{site_id}/devices")
+            networks = await _get_all_pages(client, f"/v1/sites/{site_id}/networks")
     except httpx.HTTPError as e:
         return f"Error connecting to UniFi: {e}"
 
-    if not sites:
-        return "No UniFi sites found."
+    online = sum(1 for d in devices if d.get("state") == "ONLINE")
+    offline = sum(1 for d in devices if d.get("state") != "ONLINE")
 
-    lines = ["UniFi Sites:", ""]
-    for site in sites:
-        name = site.get("name", "unknown")
-        site_id = site.get("id", "?")
-        desc = site.get("description", "")
-        lines.append(f"  {name} (ID: {site_id})")
-        if desc:
-            lines.append(f"    Description: {desc}")
+    lines = [
+        f"UniFi Network Health — {sites[0].get('name', 'Default')}",
+        "",
+        f"  Devices: {online} online, {offline} offline ({len(devices)} total)",
+        "",
+        "  Devices:",
+    ]
+    for dev in devices:
+        name = dev.get("name", "unknown")
+        state = dev.get("state", "?")
+        model = dev.get("model", "?")
+        icon = "🟢" if state == "ONLINE" else "🔴"
+        lines.append(f"    {icon} {name} ({model}) — {state}")
 
-        statistics = site.get("statistics", {})
-        if statistics:
-            counts = statistics.get("counts", {})
-            offline = counts.get("offlineDevice", 0)
-            active = counts.get("activeDevice", 0)
-            lines.append(f"    Active devices: {active}")
-            if offline:
-                lines.append(f"    Offline devices: {offline}")
-
-        isp = site.get("internetStatus", {})
-        if isp:
-            isp_status = isp.get("status", "unknown")
-            lines.append(f"    Internet: {isp_status}")
-
+    if networks:
         lines.append("")
+        lines.append("  Networks:")
+        for net in networks:
+            net_name = net.get("name", "?")
+            vlan = net.get("vlanId", "?")
+            enabled = "enabled" if net.get("enabled") else "disabled"
+            lines.append(f"    {net_name} (VLAN {vlan}) — {enabled}")
 
-    return "\n".join(lines).rstrip()
+    return "\n".join(lines)
 
 
 @tool
@@ -133,23 +146,23 @@ async def list_network_devices() -> str:
     if not devices:
         return "No network devices found."
 
-    header = f"{'NAME':<25} {'MODEL':<20} {'IP':<16} {'MAC':<18} {'STATE':<12} {'FW'}"
+    header = f"{'NAME':<25} {'MODEL':<20} {'IP':<16} {'MAC':<18} {'STATE':<8} {'FW'}"
     lines = [header, "-" * len(header)]
-    for dev in sorted(devices, key=lambda d: d.get("name", d.get("mac", ""))):
-        name = dev.get("name", dev.get("mac", "unknown"))
+    for dev in sorted(devices, key=lambda d: d.get("name", "")):
+        name = dev.get("name", "unknown")
         model = dev.get("model", "?")
-        ip = dev.get("ip", "N/A")
-        mac = dev.get("mac", "N/A")
-        state = dev.get("state", "unknown")
-        fw = dev.get("firmwareVersion", dev.get("version", "?"))
-        lines.append(f"{name:<25} {model:<20} {ip:<16} {mac:<18} {state:<12} {fw}")
+        ip = dev.get("ipAddress", "N/A")
+        mac = dev.get("macAddress", "N/A")
+        state = dev.get("state", "?")
+        fw = dev.get("firmwareVersion", "?")
+        lines.append(f"{name:<25} {model:<20} {ip:<16} {mac:<18} {state:<8} {fw}")
 
     return "\n".join(lines)
 
 
 @tool
 async def list_network_clients(wired_only: bool = False, wireless_only: bool = False) -> str:
-    """List connected network clients with IP, MAC, and connection info.
+    """List connected network clients with IP, MAC, and connection type.
 
     Args:
         wired_only: Show only wired clients.
@@ -167,23 +180,23 @@ async def list_network_clients(wired_only: bool = False, wireless_only: bool = F
     if wired_only:
         clients = [c for c in clients if c.get("type") == "WIRED"]
     elif wireless_only:
-        clients = [c for c in clients if not c.get("is_wired") and c.get("type") != "WIRED"]
+        clients = [c for c in clients if c.get("type") == "WIRELESS"]
 
     total = len(clients)
     if not clients:
         return "No clients found."
 
-    clients.sort(key=lambda c: (c.get("name") or c.get("hostname") or c.get("mac", "")).lower())
+    clients.sort(key=lambda c: (c.get("name") or c.get("macAddress", "")).lower())
 
-    header = f"{'NAME':<30} {'IP':<16} {'MAC':<18} {'TYPE':<10} {'UPTIME'}"
+    header = f"{'NAME':<30} {'IP':<16} {'MAC':<18} {'TYPE':<10} {'CONNECTED'}"
     lines = [header, "-" * len(header)]
     for cl in clients[:50]:
-        name = cl.get("name") or cl.get("hostname") or cl.get("mac", "unknown")
-        ip = cl.get("ip", "N/A")
-        mac = cl.get("mac", "N/A")
+        name = cl.get("name") or cl.get("macAddress", "unknown")
+        ip = cl.get("ipAddress", "N/A")
+        mac = cl.get("macAddress", "N/A")
         conn_type = cl.get("type", "?")
-        uptime = _seconds_to_human(cl.get("uptime", 0))
-        lines.append(f"{name:<30} {ip:<16} {mac:<18} {conn_type:<10} {uptime}")
+        connected = _time_since(cl.get("connectedAt"))
+        lines.append(f"{name:<30} {ip:<16} {mac:<18} {conn_type:<10} {connected}")
 
     if total > 50:
         lines.append(f"\n(Showing 50 of {total} clients)")
@@ -193,7 +206,7 @@ async def list_network_clients(wired_only: bool = False, wireless_only: bool = F
 
 @tool
 async def get_wan_info() -> str:
-    """Get WAN connection details including gateway device info."""
+    """Get WAN/gateway device details including IP, firmware, and port status."""
     try:
         async with _unifi_client() as client:
             site_id = await _get_site_id(client)
@@ -205,85 +218,74 @@ async def get_wan_info() -> str:
 
     gateway = None
     for dev in devices:
-        features = dev.get("features", [])
-        if isinstance(features, dict):
-            is_gw = features.get("hasGateway")
-        elif isinstance(features, list):
-            is_gw = "hasGateway" in features
-        else:
-            is_gw = False
-        if is_gw:
+        model = (dev.get("model") or "").lower()
+        name = (dev.get("name") or "").lower()
+        if any(kw in model or kw in name for kw in ("gw", "udm", "ucg", "gateway")):
             gateway = dev
             break
-    if gateway is None:
-        for dev in devices:
-            model = (dev.get("model") or "").lower()
-            name = (dev.get("name") or "").lower()
-            if any(kw in model or kw in name for kw in ("gw", "udm", "ucg", "gateway")):
-                gateway = dev
-                break
 
     if not gateway:
-        return "No gateway device found in the device list."
+        return "No gateway device found."
 
-    name = gateway.get("name", "Gateway")
-    ip = gateway.get("ip", "N/A")
-    mac = gateway.get("mac", "N/A")
-    fw = gateway.get("firmwareVersion", gateway.get("version", "?"))
-    state = gateway.get("state", "unknown")
-    uptime = _seconds_to_human(gateway.get("uptime", 0))
+    gw_id = gateway.get("id")
+    if gw_id:
+        try:
+            async with _unifi_client() as client:
+                site_id = await _get_site_id(client)
+                resp = await client.get(f"/v1/sites/{site_id}/devices/{gw_id}")
+                resp.raise_for_status()
+                gateway = resp.json()
+        except httpx.HTTPError:
+            pass
 
     lines = [
         "WAN / Gateway Info:",
-        f"  Name:     {name}",
-        f"  IP:       {ip}",
-        f"  MAC:      {mac}",
-        f"  State:    {state}",
-        f"  Firmware: {fw}",
-        f"  Uptime:   {uptime}",
+        f"  Name:     {gateway.get('name', 'Gateway')}",
+        f"  Model:    {gateway.get('model', '?')}",
+        f"  IP:       {gateway.get('ipAddress', 'N/A')}",
+        f"  MAC:      {gateway.get('macAddress', 'N/A')}",
+        f"  State:    {gateway.get('state', '?')}",
+        f"  Firmware: {gateway.get('firmwareVersion', '?')}",
     ]
 
-    interfaces = gateway.get("interfaces", [])
-    for iface in interfaces:
-        if isinstance(iface, dict):
-            if iface.get("type") == "WAN":
-                iface_name = iface.get("name", "WAN")
-                iface_ip = iface.get("ip", "N/A")
-                lines.append("")
-                lines.append(f"  {iface_name}:")
-                lines.append(f"    IP: {iface_ip}")
-        elif isinstance(iface, str) and "wan" in iface.lower():
-            lines.append(f"  Interface: {iface}")
+    interfaces = gateway.get("interfaces", {})
+    if isinstance(interfaces, dict):
+        ports = interfaces.get("ports", [])
+        if ports:
+            lines.append("")
+            lines.append("  Ports:")
+            for port in ports:
+                idx = port.get("idx", "?")
+                state = port.get("state", "?")
+                speed = port.get("speedMbps", "?")
+                max_speed = port.get("maxSpeedMbps", "?")
+                lines.append(f"    Port {idx}: {state} ({speed}/{max_speed} Mbps)")
 
     return "\n".join(lines)
 
 
 @tool
-async def list_port_forwards() -> str:
-    """List all configured port forwarding rules on the UniFi gateway."""
+async def list_networks() -> str:
+    """List all configured UniFi networks with VLAN and status info."""
     try:
         async with _unifi_client() as client:
             site_id = await _get_site_id(client)
-            rules = await _get_all_pages(client, f"/v1/sites/{site_id}/port-forwarding")
+            networks = await _get_all_pages(client, f"/v1/sites/{site_id}/networks")
     except httpx.HTTPError as e:
         return f"Error connecting to UniFi: {e}"
     except ValueError as e:
         return str(e)
 
-    if not rules:
-        return "No port forwarding rules configured."
+    if not networks:
+        return "No networks configured."
 
-    header = (
-        f"{'NAME':<25} {'DST_PORT':<12} {'FWD_IP':<16} {'FWD_PORT':<12} {'PROTO':<8} {'ENABLED'}"
-    )
+    header = f"{'NAME':<25} {'VLAN':<8} {'TYPE':<15} {'ENABLED'}"
     lines = [header, "-" * len(header)]
-    for rule in rules:
-        name = rule.get("name", "unnamed")
-        dst_port = rule.get("destinationPort", rule.get("dst_port", "?"))
-        fwd_ip = rule.get("forwardIp", rule.get("fwd", "?"))
-        fwd_port = rule.get("forwardPort", rule.get("fwd_port", "?"))
-        proto = rule.get("protocol", rule.get("proto", "both"))
-        enabled = "yes" if rule.get("enabled", True) else "no"
-        lines.append(f"{name:<25} {dst_port:<12} {fwd_ip:<16} {fwd_port:<12} {proto:<8} {enabled}")
+    for net in networks:
+        name = net.get("name", "?")
+        vlan = str(net.get("vlanId", "?"))
+        mgmt = net.get("management", "?")
+        enabled = "yes" if net.get("enabled") else "no"
+        lines.append(f"{name:<25} {vlan:<8} {mgmt:<15} {enabled}")
 
     return "\n".join(lines)

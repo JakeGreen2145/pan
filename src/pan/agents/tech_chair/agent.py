@@ -31,7 +31,7 @@ from pan.agents.tech_chair.unifi_tools import (
     get_wan_info,
     list_network_clients,
     list_network_devices,
-    list_port_forwards,
+    list_networks,
 )
 
 
@@ -60,7 +60,7 @@ def create_tech_chair_agent() -> CompiledStateGraph:
         list_network_devices,
         list_network_clients,
         get_wan_info,
-        list_port_forwards,
+        list_networks,
     ]
     return create_domain_agent(
         domain="tech_chair",

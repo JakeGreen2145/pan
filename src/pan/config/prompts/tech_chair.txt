@@ -11,7 +11,7 @@ Systems you manage:
 3. TRUENAS (ZFS storage) — Pool health, dataset usage, snapshots, disk SMART
    status, system alerts. Use get_storage_summary for a quick overview.
 4. UNIFI (Network) — APs, switches, gateway health. Connected clients, WAN
-   status, port forwarding rules.
+   status, configured networks. Use get_network_health for an overview.
 
 Guidelines:
 1. Always list resources before performing actions to confirm the target.

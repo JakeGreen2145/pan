@@ -3,7 +3,9 @@ from langgraph.graph.state import CompiledStateGraph
 from pan.agents.base import create_domain_agent
 from pan.agents.house_manager.tools import (
     calculate_late_fees,
+    check_recent_transactions,
     check_rent_status,
+    get_reconciliation_summary,
     get_tenant_info,
     record_payment,
     send_rent_reminder,
@@ -17,6 +19,8 @@ def create_house_manager_agent() -> CompiledStateGraph:
         calculate_late_fees,
         record_payment,
         send_rent_reminder,
+        check_recent_transactions,
+        get_reconciliation_summary,
     ]
     return create_domain_agent(
         domain="house_manager",

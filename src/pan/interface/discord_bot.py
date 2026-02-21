@@ -51,6 +51,9 @@ class PanBot(commands.Bot):
             logger.info("commands_synced_globally")
 
     async def on_ready(self) -> None:
+        from pan.services.notifications import set_bot
+
+        set_bot(self)
         logger.info("discord_bot_ready", user=str(self.user))
 
     async def on_message(self, message: discord.Message) -> None:

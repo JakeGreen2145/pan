@@ -103,6 +103,16 @@ class UniFiSettings(BaseModel):
     verify_ssl: bool = False
 
 
+class PlaidSettings(BaseModel):
+    """Plaid bank integration settings. Env: PAN_PLAID__CLIENT_ID, etc."""
+
+    client_id: str = ""
+    secret: SecretStr = SecretStr("")
+    environment: str = "development"
+    access_tokens: dict[str, str] = {}
+    webhook_url: str = ""
+
+
 class Settings(BaseSettings):
     """Root settings. All env vars use PAN_ prefix, __ for nesting."""
 
@@ -122,6 +132,7 @@ class Settings(BaseSettings):
     truenas: TrueNASSettings = TrueNASSettings()
     proxmox: ProxmoxSettings = ProxmoxSettings()
     unifi: UniFiSettings = UniFiSettings()
+    plaid: PlaidSettings = PlaidSettings()
 
     debug: bool = False
     log_level: str = "INFO"

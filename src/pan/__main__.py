@@ -41,6 +41,14 @@ async def main() -> None:
 
     bot = PanBot(settings.discord, graph)
 
+    import uvicorn
+
+    from pan.api.app import create_api
+
+    api = create_api()
+    api_config = uvicorn.Config(api, host="0.0.0.0", port=8080, log_level="warning")  # noqa: S104
+    api_server = uvicorn.Server(api_config)
+
     print(
         "\n"
         " '########:::::'###::::'##::: ##:\n"
@@ -55,7 +63,11 @@ async def main() -> None:
 
     try:
         logger.info("starting_discord_bot")
-        await bot.start(settings.discord.token.get_secret_value())
+        logger.info("starting_admin_api", port=8080)
+        await asyncio.gather(
+            bot.start(settings.discord.token.get_secret_value()),
+            api_server.serve(),
+        )
     except KeyboardInterrupt:
         logger.info("keyboard_interrupt_received")
     finally:

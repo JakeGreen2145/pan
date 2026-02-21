@@ -34,9 +34,10 @@ Pan runs a team of specialized AI agents that handle different domains of househ
 │ • Portainer (multi)  │ │ • Rent status│    Media Expert
 │ • Proxmox VE (VMs)  │ │ • Tenants    │  │ Social Chair       │
 │ • TrueNAS (storage)  │ │ • Payments   │    Professional Rels
-│ • UniFi (network)    │ │ • Late fees  │  │ Public Relations   │
-│                      │ │ • Reminders  │    House Doctor
-│  24 tools            │ │  (Postgres)  │  └ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+│ • UniFi (network)    │ │ • Plaid/Zelle│  │ Public Relations   │
+│                      │ │ • Late fees  │    House Doctor
+│  24 tools            │ │ • Leases     │  └ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+│                      │ │  7 tools     │
 └──────────────────────┘ └──────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
@@ -45,7 +46,9 @@ Pan runs a team of specialized AI agents that handle different domains of househ
 │   PostgreSQL ─── SQLAlchemy async ─── Alembic migrations      │
 │   Redis ──────── caching / pub-sub                            │
 │   LangGraph ──── checkpointer (psycopg3)                      │
-│   APScheduler ── cron jobs (monthly rent check)               │
+│   APScheduler ── cron jobs (rent check, Plaid sync, matching) │
+│   Plaid ──────── bank transaction sync (Zelle detection)      │
+│   FastAPI ────── Admin API (port 8080)                        │
 │   OpenRouter ─── LLM API (Claude Sonnet)                      │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -55,7 +58,9 @@ Pan runs a team of specialized AI agents that handle different domains of househ
 - **Supervisor pattern**: A central LangGraph `StateGraph` routes messages to domain agents. Each agent is a LangGraph `react_agent` with its own tools, prompt, and model config. After an agent responds, control returns to the supervisor.
 - **Approval workflow**: Agents can trigger human-in-the-loop interrupts. The Discord bot presents approve/reject buttons and pauses the graph until an admin responds (or times out after 5 minutes).
 - **Persistence**: LangGraph state is checkpointed to Postgres via `AsyncPostgresSaver`, so conversations survive restarts. Each Discord thread gets its own `thread_id` for multi-turn context.
-- **Scheduled tasks**: APScheduler runs cron jobs (e.g., monthly rent checks on the 1st at 9 AM) by injecting messages directly into the graph.
+- **Scheduled tasks**: APScheduler runs cron jobs — monthly rent checks (1st at 9 AM), Plaid transaction sync (every 6 hours), and automated payment matching (every 6h15m).
+- **Payment reconciliation**: Plaid pulls bank transactions, detects Zelle payments via `original_description` parsing, and fuzzy-matches sender names against tenants using rapidfuzz.
+- **Admin API + UI**: FastAPI serves a REST API on port 8080 for tenant/unit/payment CRUD. A React admin UI on port 5173 provides a dashboard for managing tenants, viewing transactions, uploading leases, and connecting bank accounts.
 - **Config**: All settings use Pydantic `BaseSettings` with `PAN_` env prefix and `__` nesting (`PAN_DB__HOST`, `PAN_DISCORD__TOKEN`, etc.).
 
 ### Agents
@@ -63,7 +68,7 @@ Pan runs a team of specialized AI agents that handle different domains of househ
 | Agent | Domain | Integrations | Tools |
 |-------|--------|--------------|-------|
 | **Tech Chair** | Infrastructure | Portainer (multi-instance), Proxmox VE, TrueNAS Scale, UniFi | 24 tools — containers, VMs, storage, network |
-| **House Manager** | Tenant & rent | PostgreSQL | 5 tools — rent status, tenants, payments, late fees, reminders |
+| **House Manager** | Tenant & rent | PostgreSQL, Plaid (Zelle/bank transactions) | 7 tools — rent status, tenants, payments, late fees, reminders, bank transactions, reconciliation |
 
 Each agent is defined as a module under `src/pan/agents/<domain>/` with:
 - `agent.py` — creates the LangGraph agent and registers tools
@@ -136,8 +141,12 @@ PAN_PROXMOX__NODE_NAME=pve
 
 # UniFi
 PAN_UNIFI__BASE_URL=https://192.168.1.1
-PAN_UNIFI__USERNAME=admin
-PAN_UNIFI__PASSWORD=your-unifi-password
+PAN_UNIFI__API_KEY=your-unifi-api-key
+
+# Plaid (bank transactions for rent tracking)
+PAN_PLAID__CLIENT_ID=your-plaid-client-id
+PAN_PLAID__SECRET=your-plaid-secret
+PAN_PLAID__ENVIRONMENT=development
 
 # General
 PAN_DEBUG=true
@@ -154,7 +163,8 @@ Each external service Pan connects to has its own setup guide:
 | Portainer | Tech Chair — Docker container management (multi-instance) | [docs/portainer.md](docs/portainer.md) |
 | Proxmox VE | Tech Chair — VM and LXC container management | [docs/proxmox.md](docs/proxmox.md) |
 | TrueNAS Scale | Tech Chair — ZFS storage, disks, snapshots, alerts | [docs/truenas.md](docs/truenas.md) |
-| UniFi | Tech Chair — Network devices, clients, WAN, port forwarding | [docs/unifi.md](docs/unifi.md) |
+| UniFi | Tech Chair — Network devices, clients, WAN, networks | [docs/unifi.md](docs/unifi.md) |
+| Plaid | House Manager — Bank transaction sync, Zelle payment detection | [docs/plaid.md](docs/plaid.md) |
 
 ### 4. Run database migrations
 
@@ -233,15 +243,22 @@ pan/
 │   │   └── discord_views.py     # Approval button UI
 │   ├── services/
 │   │   ├── database.py          # SQLAlchemy async engine + sessions
-│   │   ├── models.py            # User, Tenant, RentPayment, ApprovalRequest
+│   │   ├── models.py            # ORM models (User, Tenant, RentPayment, PlaidItem, BankTransaction, LeaseDocument)
 │   │   ├── checkpointer.py      # LangGraph Postgres checkpointer
-│   │   └── redis.py             # Redis client
+│   │   ├── redis.py             # Redis client
+│   │   ├── plaid_service.py     # Plaid API: link, sync, Zelle detection
+│   │   ├── payment_matcher.py   # Fuzzy tenant matching + reconciliation
+│   │   └── notifications.py     # Discord channel notifications
+│   ├── api/
+│   │   ├── app.py               # FastAPI factory (port 8080)
+│   │   └── routes/              # REST endpoints: tenants, units, payments, plaid, leases
 │   ├── config/
 │   │   ├── settings.py          # Pydantic BaseSettings
 │   │   ├── models.py            # Per-agent LLM config
 │   │   ├── logging.py           # structlog setup
 │   │   └── prompts/             # Agent system prompts (.txt)
 │   └── exceptions.py            # PanError hierarchy
+├── admin/                       # React admin UI (Vite + TypeScript)
 ├── tests/
 ├── docs/                        # Integration setup guides
 ├── alembic/                     # Database migrations

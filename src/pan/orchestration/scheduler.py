@@ -25,6 +25,23 @@ class PanScheduler:
             replace_existing=True,
         )
 
+        self._scheduler.add_job(
+            self._run_transaction_sync,
+            trigger="interval",
+            hours=6,
+            id="plaid_transaction_sync",
+            replace_existing=True,
+        )
+
+        self._scheduler.add_job(
+            self._run_payment_matching,
+            trigger="interval",
+            hours=6,
+            minutes=15,
+            id="payment_auto_match",
+            replace_existing=True,
+        )
+
         self._scheduler.start()
         logger.info("scheduler_started", job_count=len(self._scheduler.get_jobs()))
 
@@ -58,3 +75,42 @@ class PanScheduler:
 
         except Exception:
             logger.exception("scheduled_rent_check_failed", thread_id=thread_id)
+
+    async def _run_transaction_sync(self) -> None:
+        from pan.services.plaid_service import sync_all_items
+
+        logger.info("scheduled_transaction_sync_started")
+        try:
+            count = await sync_all_items()
+            logger.info("scheduled_transaction_sync_completed", new_transactions=count)
+        except Exception:
+            logger.exception("scheduled_transaction_sync_failed")
+
+    async def _run_payment_matching(self) -> None:
+        from pan.services.notifications import (
+            notify_reconciliation_summary,
+        )
+        from pan.services.payment_matcher import (
+            get_reconciliation_summary,
+            match_unmatched_transactions,
+        )
+
+        logger.info("scheduled_payment_matching_started")
+        try:
+            results = await match_unmatched_transactions()
+            logger.info("scheduled_payment_matching_completed", results=results)
+
+            if results.get("matched", 0) > 0 or results.get("partial", 0) > 0:
+                summary = await get_reconciliation_summary()
+                await notify_reconciliation_summary(
+                    month=summary.get("month", ""),
+                    total_expected=summary.get("total_expected", 0),
+                    total_received=summary.get("total_received", 0),
+                    unpaid_tenants=[
+                        t["name"]
+                        for t in summary.get("tenants", [])
+                        if t.get("paid", 0) < t.get("expected", 0)
+                    ],
+                )
+        except Exception:
+            logger.exception("scheduled_payment_matching_failed")

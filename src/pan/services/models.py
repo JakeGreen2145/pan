@@ -88,3 +88,61 @@ class ApprovalRequest(Base):
     resolved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     resolved_at: Mapped[datetime | None]
+
+
+class MatchStatus(enum.StrEnum):
+    MATCHED = "matched"
+    PARTIAL = "partial"
+    UNMATCHED = "unmatched"
+    MANUAL = "manual"
+    IGNORED = "ignored"
+
+
+class PlaidItem(Base):
+    __tablename__ = "plaid_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    institution_name: Mapped[str] = mapped_column(String(200))
+    access_token: Mapped[str] = mapped_column(String(500))
+    item_id: Mapped[str] = mapped_column(String(200), unique=True)
+    cursor: Mapped[str | None] = mapped_column(String(500))
+    last_synced_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class BankTransaction(Base):
+    __tablename__ = "bank_transactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    plaid_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("plaid_items.id", ondelete="CASCADE"), index=True
+    )
+    plaid_transaction_id: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    date: Mapped[date]
+    name: Mapped[str] = mapped_column(String(500))
+    original_description: Mapped[str | None] = mapped_column(String(1000))
+    payment_channel: Mapped[str | None] = mapped_column(String(50))
+    is_zelle: Mapped[bool] = mapped_column(default=False)
+    parsed_sender_name: Mapped[str | None] = mapped_column(String(200))
+    matched_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id"), index=True
+    )
+    match_status: Mapped[MatchStatus] = mapped_column(default=MatchStatus.UNMATCHED, index=True)
+    match_confidence: Mapped[int] = mapped_column(default=0)
+    rent_payment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("rent_payments.id"))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class LeaseDocument(Base):
+    __tablename__ = "lease_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(500))
+    file_path: Mapped[str] = mapped_column(String(1000))
+    lease_start: Mapped[date | None]
+    lease_end: Mapped[date | None]
+    uploaded_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -33,6 +33,15 @@ dependencies = [
     "apscheduler>=3.10.0",
     # Logging
     "structlog>=24.4.0",
+    # Admin API
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "python-multipart>=0.0.18",
+    "aiofiles>=24.1.0",
+    # Plaid (bank transactions)
+    "plaid-python>=29.0.0",
+    # Fuzzy matching (rent reconciliation)
+    "rapidfuzz>=3.10.0",
     # Performance
     "uvloop>=0.21.0; sys_platform != 'win32'",
 ]

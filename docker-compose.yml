@@ -37,8 +37,13 @@ services:
       dockerfile: Dockerfile
     container_name: pan
     restart: unless-stopped
+    ports:
+      - "8080:8080"
     env_file:
       - .env
+    environment:
+      - PAN_DB__HOST=postgres
+      - PAN_REDIS__HOST=redis
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,6 +56,21 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  pan-admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    container_name: pan-admin
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_TARGET=http://pan:8080
+    depends_on:
+      pan:
+        condition: service_healthy
+
 
 volumes:
   pgdata:

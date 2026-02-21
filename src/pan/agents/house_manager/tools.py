@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from pan.services.database import get_session
-from pan.services.models import RentPayment, Tenant, User
+from pan.services.models import BankTransaction, MatchStatus, RentPayment, Tenant, User
 
 logger = structlog.get_logger()
 
@@ -273,3 +273,99 @@ async def send_rent_reminder(tenant_name: str | None = None) -> str:
         + "\n".join(reminders)
         + "\n\n(Notifications will be sent via Discord.)"
     )
+
+
+@tool
+async def check_recent_transactions(
+    days: int = 30, zelle_only: bool = True, unmatched_only: bool = False
+) -> str:
+    """Check recent bank transactions from Plaid, showing Zelle payments and match status.
+
+    Args:
+        days: Number of days to look back (default: 30).
+        zelle_only: Show only Zelle transactions (default: True).
+        unmatched_only: Show only unmatched transactions (default: False).
+    """
+    cutoff = date.today() - __import__("datetime").timedelta(days=days)
+
+    async with get_session() as session:
+        query = select(BankTransaction).where(BankTransaction.date >= cutoff)
+        if zelle_only:
+            query = query.where(BankTransaction.is_zelle.is_(True))
+        if unmatched_only:
+            query = query.where(BankTransaction.match_status == MatchStatus.UNMATCHED)
+        query = query.order_by(BankTransaction.date.desc())
+
+        result = await session.execute(query)
+        txns = result.scalars().all()
+
+    if not txns:
+        return "No matching transactions found."
+
+    lines = [f"Recent transactions (last {days} days):", ""]
+    for txn in txns:
+        status_icon = {
+            MatchStatus.MATCHED: "✅",
+            MatchStatus.PARTIAL: "⚠️",
+            MatchStatus.MANUAL: "🔧",
+            MatchStatus.UNMATCHED: "❌",
+            MatchStatus.IGNORED: "⏭️",
+        }.get(txn.match_status, "?")
+
+        sender = txn.parsed_sender_name or txn.name
+        lines.append(
+            f"  {status_icon} {txn.date} | ${txn.amount:.2f} | {sender} | {txn.match_status.value}"
+        )
+
+    matched = sum(1 for t in txns if t.match_status == MatchStatus.MATCHED)
+    unmatched = sum(1 for t in txns if t.match_status == MatchStatus.UNMATCHED)
+    lines.append("")
+    lines.append(f"Total: {len(txns)} | Matched: {matched} | Unmatched: {unmatched}")
+
+    return "\n".join(lines)
+
+
+@tool
+async def get_reconciliation_summary(month: str | None = None) -> str:
+    """Get a rent reconciliation summary for a given month.
+
+    Args:
+        month: Month in YYYY-MM format (default: current month).
+    """
+    from pan.services.payment_matcher import get_reconciliation_summary as _get_summary
+
+    try:
+        summary = await _get_summary(month)
+    except Exception as e:
+        return f"Error generating reconciliation summary: {e}"
+
+    lines = [f"Reconciliation Summary — {summary.get('month', 'N/A')}:", ""]
+
+    total_expected = summary.get("total_expected", 0)
+    total_received = summary.get("total_received", 0)
+    lines.append(f"  Total Expected:  ${total_expected:.2f}")
+    lines.append(f"  Total Received:  ${total_received:.2f}")
+    lines.append(f"  Shortfall:       ${max(0, total_expected - total_received):.2f}")
+    lines.append("")
+
+    tenants = summary.get("tenants", [])
+    if tenants:
+        lines.append("  Per-Tenant:")
+        for t in tenants:
+            status = "✅ PAID" if t.get("paid", 0) >= t.get("expected", 0) else "❌ UNPAID"
+            lines.append(
+                f"    {t.get('name', '?')} (Unit {t.get('unit', '?')}): "
+                f"${t.get('paid', 0):.2f} / ${t.get('expected', 0):.2f} {status}"
+            )
+
+    unmatched = summary.get("unmatched_transactions", [])
+    if unmatched:
+        lines.append("")
+        lines.append(f"  Unmatched Transactions ({len(unmatched)}):")
+        for u in unmatched:
+            amt = u.get("amount", 0)
+            sender = u.get("sender", "unknown")
+            dt = u.get("date", "?")
+            lines.append(f"    ${amt:.2f} from {sender} on {dt}")
+
+    return "\n".join(lines)
